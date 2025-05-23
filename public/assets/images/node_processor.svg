@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#99eebb" rx="8" ry="8"/>
+  <rect x="12" y="12" width="40" height="40" rx="4" ry="4" fill="#66cc99" stroke="#339966" stroke-width="2"/>
+  <line x1="22" y1="22" x2="42" y2="42" stroke="#ffffff" stroke-width="3"/>
+  <line x1="22" y1="42" x2="42" y2="22" stroke="#ffffff" stroke-width="3"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#000000">PROC</text>
+</svg>

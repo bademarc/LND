@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#cccccc" rx="8" ry="8"/>
+  <circle cx="32" cy="32" r="20" fill="#888888" stroke="#555555" stroke-width="2"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#000000">DEF</text>
+</svg>

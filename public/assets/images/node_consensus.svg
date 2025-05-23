@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#ffcc80" rx="8" ry="8"/>
+  <circle cx="32" cy="22" r="10" fill="#ffaa4d" stroke="#cc8833" stroke-width="2"/>
+  <path d="M22 38 L32 52 L42 38 Z" fill="#ffaa4d" stroke="#cc8833" stroke-width="2"/>
+  <text x="50%" y="65%" dominant-baseline="middle" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#000000">CONS</text>
+</svg>

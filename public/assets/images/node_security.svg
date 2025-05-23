@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#a0c4ff" rx="8" ry="8"/>
+  <path d="M32 5 L6 20 L6 44 L32 59 L58 44 L58 20 Z" fill="#6a9eda" stroke="#3a6da0" stroke-width="2"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#ffffff">SEC</text>
+</svg>
