@@ -3,11 +3,18 @@ export default class GameScene extends Phaser.Scene {
         super('GameScene');
         this.nodes = [];
         this.webSocket = null;
+        this.playerHype = 0;
+        this.serverMemes = []; 
+        this.currentPlayerId = null;
     }
 
     init(data) {
         // Data passed from other scenes, if any
         console.log('GameScene: Initializing with data:', data);
+        // Reset properties if scene is re-initialized
+        this.playerHype = 0;
+        this.serverMemes = [];
+        this.currentPlayerId = null;
     }
 
     preload() {
@@ -46,6 +53,22 @@ export default class GameScene extends Phaser.Scene {
         this.events.on('ui_event', this.handleUIEvent, this);
         // Listen for chat messages to send from UIScene
         this.events.on('send_chat_message', this.sendChatMessageToServer, this);
+
+        // Listen for hype investment requests from UIScene
+        const uiScene = this.scene.get('UIScene');
+        if (uiScene) { // Check if UIScene is available
+            uiScene.events.on('ui_invest_hype_request', this.handleUIInvestHypeRequest, this);
+        } else {
+            // Poll for UIScene if it's not ready immediately (e.g. race condition on startup)
+            this.time.delayedCall(500, () => {
+                const uiSceneRetry = this.scene.get('UIScene');
+                if (uiSceneRetry) {
+                    uiSceneRetry.events.on('ui_invest_hype_request', this.handleUIInvestHypeRequest, this);
+                } else {
+                    console.error("GameScene: UIScene not found even after delay. Cannot set up 'ui_invest_hype_request' listener.");
+                }
+            });
+        }
     }
 
     update(time, delta) {
@@ -93,6 +116,46 @@ export default class GameScene extends Phaser.Scene {
         switch (message.type) {
             case 'connection_ack':
                 console.log('Server Acknowledged Connection:', message.message);
+                this.currentPlayerId = message.playerId;
+                this.playerHype = message.currentHype || 0; // Default to 0 if not provided
+                this.serverMemes = message.serverMemes || []; // Default to empty array
+                
+                console.log(`GameScene: Player ID ${this.currentPlayerId} initialized with ${this.playerHype} Hype.`);
+                console.log('GameScene: Initial server memes:', this.serverMemes);
+
+                this.events.emit('player_hype_updated', { newHypeAmount: this.playerHype });
+                this.events.emit('all_memes_status_updated', { memes: this.serverMemes });
+                break;
+            case 'update_player_hype':
+                this.playerHype = message.newHypeAmount;
+                console.log('GameScene: Player hype updated to', this.playerHype);
+                this.events.emit('player_hype_updated', { newHypeAmount: this.playerHype });
+                break;
+            case 'all_memes_status_update':
+                this.serverMemes = message.memes;
+                console.log('GameScene: All memes status updated', this.serverMemes);
+                this.events.emit('all_memes_status_updated', { memes: this.serverMemes });
+                break;
+            case 'meme_viral_event':
+                console.log('GameScene: Meme Viral Event!', message);
+                const { /*memeId, memeName,*/ investorPlayerIds, /*rewardAmount,*/ message: eventMessage } = message;
+                const playerWon = investorPlayerIds.includes(this.currentPlayerId);
+                // UIScene will handle the general notification.
+                // If playerWon is true, server will send separate 'update_resources'
+                this.scene.get('UIScene').events.emit('show_notification', { text: eventMessage, duration: 7000 });
+                if(playerWon) {
+                    console.log("GameScene: Current player was an investor in the viral meme!");
+                    // Additional client-side effects for winning can go here if needed.
+                }
+                break;
+            case 'error': // General error message from server
+                if (message.context === 'invest_hype') {
+                    console.error('GameScene: Hype investment error:', message.message);
+                    this.scene.get('UIScene').events.emit('show_notification', { text: `Investment Error: ${message.message}`, duration: 4000, type: 'error' });
+                } else {
+                    console.error('GameScene: Received generic error from server:', message.message);
+                    this.scene.get('UIScene').events.emit('show_notification', { text: `Server Error: ${message.message}`, duration: 4000, type: 'error' });
+                }
                 break;
             case 'game_state_update':
                 // Update local game state based on server data
@@ -216,13 +279,37 @@ export default class GameScene extends Phaser.Scene {
                 rushScene.events.off('transaction_rush_complete', this.handleRushComplete, this);
              }
         }
+
+        // Remove listener for hype investment requests
+        const uiScene = this.scene.get('UIScene');
+        if (uiScene && uiScene.events) { // Check if UIScene and its events emitter exist
+            uiScene.events.off('ui_invest_hype_request', this.handleUIInvestHypeRequest, this);
+        }
+
         console.log('GameScene: Shutdown, WebSocket closed.');
+    }
+
+    handleUIInvestHypeRequest(data) {
+        const { memeId, amount } = data;
+        console.log(`GameScene: UI request to invest ${amount} hype in ${memeId}`);
+        if (this.webSocket && this.webSocket.readyState === 1) { // WebSocket.OPEN is 1
+            this.webSocket.send(JSON.stringify({
+                type: 'invest_hype',
+                memeId: memeId,
+                amount: parseInt(amount, 10)
+            }));
+        } else {
+            console.warn('GameScene: WebSocket not open. Cannot send invest_hype.');
+            if (this.scene.get('UIScene')) {
+                this.scene.get('UIScene').events.emit('show_notification', { text: 'Error: Not connected to server.', duration: 3000, type: 'error' });
+            }
+        }
     }
 
     // Method for TransactionRushScene to send verifications
     // This is a workaround. Ideally, TransactionRushScene emits an event, and GameScene handles sending.
     sendVerificationAttempt(verificationsCount) {
-        if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
+        if (this.webSocket && this.webSocket.readyState === 1) { // WebSocket.OPEN
             this.webSocket.send(JSON.stringify({ type: 'rush_verification_attempt', count: verificationsCount }));
         }
     }

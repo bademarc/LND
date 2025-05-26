@@ -13,6 +13,15 @@ const PORT = process.env.PORT || 3000;
 // Player Data Storage
 const playerData = new Map();
 
+// Meme Definitions
+let serverMemes = [
+    { id: 'meme1', name: 'Classic Doge', currentHypeInvestment: 0, iconKey: 'icon_doge', investorsThisCycle: {} },
+    { id: 'meme2', name: 'Stonks Guy', currentHypeInvestment: 0, iconKey: 'icon_stonks', investorsThisCycle: {} }
+];
+const MIN_HYPE_TO_GO_VIRAL = 50; 
+const MIN_VIRALITY_SCORE_THRESHOLD = 30; 
+const VIRAL_REWARD_AMOUNT = 500; 
+
 // Global Surge State
 let isSurgeActive = false;
 let surgeTimeoutId = null;
@@ -82,15 +91,19 @@ wss.on('connection', (ws) => {
     
     // Initialize player data
     const initialResources = 1000;
-    playerData.set(ws.playerId, { resources: initialResources, id: ws.playerId });
-    console.log(`Client ${ws.playerId} connected. Initialized with ${initialResources} resources.`);
+    const initialHype = 100;
+    playerData.set(ws.playerId, { resources: initialResources, hype: initialHype, id: ws.playerId });
+    const player = playerData.get(ws.playerId); // Get reference for use in connection_ack
+    console.log(`Client ${ws.playerId} connected. Initialized with ${initialResources} resources and ${initialHype} hype.`);
 
     // Send a welcome message with playerId and resources
     ws.send(JSON.stringify({ 
         type: 'connection_ack', 
         message: 'Welcome to LayerEdge Network Defender!',
         playerId: ws.playerId,
-        currentResources: initialResources
+        currentResources: player.resources,
+        currentHype: player.hype,
+        serverMemes: serverMemes.map(m => ({ id: m.id, name: m.name, currentHypeInvestment: m.currentHypeInvestment, iconKey: m.iconKey })) // Send current meme status
     }));
 
     // Trigger surge for testing (if not already active)
@@ -128,16 +141,41 @@ wss.on('connection', (ws) => {
                         timestamp: new Date().toISOString()
                     });
                     break;
+                case 'invest_hype':
+                    if (!player) { // Should have been caught earlier, but double check
+                        console.error(`Player data not found for invest_hype from ${ws.playerId}.`);
+                        return;
+                    }
+                    const meme = serverMemes.find(m => m.id === parsedMessage.memeId);
+                    if (!meme) {
+                        console.error(`Meme ${parsedMessage.memeId} not found for investment by ${ws.playerId}.`);
+                        ws.send(JSON.stringify({ type: 'error', message: `Meme ${parsedMessage.memeId} not found.`}));
+                        return;
+                    }
+                    const amount = parseInt(parsedMessage.amount, 10);
+                    if (isNaN(amount) || amount <= 0 || player.hype < amount) {
+                        ws.send(JSON.stringify({ type: 'error', message: 'Insufficient hype or invalid amount.' }));
+                        return;
+                    }
+
+                    player.hype -= amount;
+                    meme.currentHypeInvestment += amount;
+                    meme.investorsThisCycle[ws.playerId] = (meme.investorsThisCycle[ws.playerId] || 0) + amount;
+                    
+                    playerData.set(ws.playerId, player); // Save player changes
+
+                    ws.send(JSON.stringify({ type: 'update_player_hype', newHypeAmount: player.hype }));
+                    
+                    broadcast({ 
+                        type: 'all_memes_status_update', 
+                        memes: serverMemes.map(m => ({ id: m.id, name: m.name, currentHypeInvestment: m.currentHypeInvestment, iconKey: m.iconKey })) 
+                    });
+                    console.log(`Player ${ws.playerId} invested ${amount} hype in ${meme.name}. Player Hype: ${player.hype}. Meme Hype: ${meme.currentHypeInvestment}`);
+                    break;
                 case 'transaction_score':
+                    if (!player) return; // Player context already checked
                     console.log(`Received transaction_score from ${ws.playerId}: ${parsedMessage.score} / ${parsedMessage.target}`);
                     
-                    // Basic validation: Score processing is more lenient here, assuming it arrives during/soon after surge
-                    // A more robust solution would involve server-side state tracking of player participation in a surge.
-                    // if (!isSurgeActive) {
-                    //     console.log(`Score from ${ws.playerId} received while surge is not active. Ignoring.`);
-                    //     return; // Or send an error/info message
-                    // }
-
                     const rewardPerVerification = 10;
                     let earnedResources = parsedMessage.score * rewardPerVerification;
 
@@ -158,9 +196,8 @@ wss.on('connection', (ws) => {
                     ws.send(JSON.stringify(resourceUpdateMsg));
                     console.log(`Awarded ${Math.floor(earnedResources)} resources to ${ws.playerId}. New total: ${player.resources}`);
                     break;
-                case 'rush_verification_attempt': // Placeholder for potential server-side validation if needed later
+                case 'rush_verification_attempt': // Placeholder
                     // console.log(`Player ${ws.playerId} verification attempt: ${parsedMessage.count}`);
-                    // This message type is currently handled client-side primarily for the mini-game itself.
                     // Server might log it or use it for anti-cheat in the future.
                     break;
                 default:
@@ -195,6 +232,80 @@ wss.on('connection', (ws) => {
     });
 });
 
+function calculateViralSpread() {
+    console.log('Calculating viral spread...');
+    let winningMeme = null;
+    let maxViralityScore = 0;
+
+    serverMemes.forEach(meme => {
+        if (meme.currentHypeInvestment < MIN_HYPE_TO_GO_VIRAL) {
+            console.log(`Meme ${meme.name} has ${meme.currentHypeInvestment} hype, less than ${MIN_HYPE_TO_GO_VIRAL} required. Not eligible for virality.`);
+            return; // continue to next meme
+        }
+
+        let viralityScore = meme.currentHypeInvestment * Math.random(); // Randomness factor
+        console.log(`Meme ${meme.name} current investment: ${meme.currentHypeInvestment}, calculated virality score: ${viralityScore}`);
+
+        if (viralityScore > maxViralityScore) {
+            maxViralityScore = viralityScore;
+            winningMeme = meme;
+        }
+    });
+
+    if (winningMeme && maxViralityScore >= MIN_VIRALITY_SCORE_THRESHOLD) {
+        console.log(`Meme '${winningMeme.name}' went viral with score ${maxViralityScore}!`);
+        let investorPlayerIds = Object.keys(winningMeme.investorsThisCycle);
+
+        if (investorPlayerIds.length > 0) {
+            broadcast({ 
+                type: 'meme_viral_event', 
+                memeId: winningMeme.id, 
+                memeName: winningMeme.name, 
+                investorPlayerIds: investorPlayerIds, 
+                rewardAmount: VIRAL_REWARD_AMOUNT, 
+                message: `${winningMeme.name} went VIRAL! Investors got ${VIRAL_REWARD_AMOUNT} resources!` 
+            });
+
+            for (const pId of investorPlayerIds) {
+                const investorObject = playerData.get(pId);
+                if (investorObject) {
+                    investorObject.resources += VIRAL_REWARD_AMOUNT;
+                    playerData.set(pId, investorObject); // Update server-side data
+                    
+                    for (const client of wss.clients) {
+                        if (client.playerId === pId && client.readyState === WebSocket.OPEN) {
+                            client.send(JSON.stringify({
+                                type: 'update_resources',
+                                newTotal: investorObject.resources,
+                                changeAmount: VIRAL_REWARD_AMOUNT,
+                                reason: `Viral Meme '${winningMeme.name}' Payout`
+                            }));
+                            break; 
+                        }
+                    }
+                }
+            }
+        } else {
+             console.log(`Meme '${winningMeme.name}' went viral, but had no tracked investors in investorsThisCycle.`);
+        }
+    } else {
+        console.log('No meme reached viral status this cycle or met the virality score threshold.');
+        // Optionally broadcast a "no_viral_event"
+        // broadcast({ type: 'no_viral_event', message: 'No meme went viral this cycle.' });
+    }
+
+    // Reset for next cycle
+    console.log('Resetting meme investments for next cycle.');
+    serverMemes.forEach(m => {
+        m.currentHypeInvestment = 0;
+        m.investorsThisCycle = {};
+    });
+    broadcast({ 
+        type: 'all_memes_status_update', 
+        memes: serverMemes.map(m => ({ id: m.id, name: m.name, currentHypeInvestment: m.currentHypeInvestment, iconKey: m.iconKey })) 
+    });
+}
+
 // Placeholder for MongoDB connection function
 /*
 async function connectDB() {
@@ -225,6 +336,10 @@ async function startServer() {
     server.listen(PORT, () => {
         console.log(`Server listening on port ${PORT}`);
         console.log(`Game client should be accessible at http://localhost:${PORT}`);
+        
+        // Start periodic calculation for viral spread
+        setInterval(calculateViralSpread, 120000); // Every 2 minutes
+        console.log(`Periodic viral spread calculation started. Interval: 120000ms`);
     });
 }
 
@@ -242,7 +357,12 @@ module.exports = {
     __setSurgeTimeoutId: (value) => surgeTimeoutId = value, // Setter for testing
     startTransactionSurge,
     endTransactionSurge,
-    broadcast // Export broadcast if needed for specific tests, or to mock its behavior
+    broadcast,
+    serverMemes, // For testing
+    calculateViralSpread, // For testing
+    MIN_HYPE_TO_GO_VIRAL, // For testing
+    MIN_VIRALITY_SCORE_THRESHOLD, // For testing
+    VIRAL_REWARD_AMOUNT // For testing
     // Note: Direct testing of on-message logic for 'transaction_score' is hard without refactoring
     // The core logic is inside wss.on('connection', ws => ws.on('message', ...))
     // A full test would require mocking a WebSocket connection and triggering the message event.

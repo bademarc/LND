@@ -51,6 +51,10 @@ export default class BootScene extends Phaser.Scene {
         // If it's a complex spritesheet, a PNG would be better. Let's use a single SVG image for placeholder.
         this.load.svg('explosion_placeholder', '../assets/spritesheets/explosion_placeholder.svg');
 
+        // Load Meme Icons
+        this.load.svg('icon_doge', '../assets/images/icon_doge.svg');
+        this.load.svg('icon_stonks', '../assets/images/icon_stonks.svg');
+
         // Load audio assets (ensure they are in public/audio)
         // this.load.audio('transaction_sfx', '../audio/transaction.wav');
         // this.load.audio('attack_sfx', '../audio/attack.mp3');

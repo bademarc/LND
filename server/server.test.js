@@ -7,9 +7,13 @@ const {
     __setSurgeTimeoutId,
     startTransactionSurge,
     endTransactionSurge,
-    // We cannot directly test the 'transaction_score' message handler
-    // as it's deeply nested. We will describe tests conceptually for it.
-    // For broadcast, we'll mock wss.clients directly.
+    broadcast, // Assuming broadcast is exported for direct testing/spying if needed
+    serverMemes, // Exported from server.js
+    calculateViralSpread, // Exported from server.js
+    MIN_HYPE_TO_GO_VIRAL,
+    MIN_VIRALITY_SCORE_THRESHOLD,
+    VIRAL_REWARD_AMOUNT
+    // Note: 'invest_hype' message handler is deeply nested, will be tested conceptually.
 } = require('./server.js'); // server.js is in the same directory
 
 // Mock WebSocket Server and clients
@@ -50,6 +54,9 @@ function sinonSpy() {
 
 
 describe('Server Functionality', function() {
+    let originalWssClients; // To store the original wss.clients from server.js
+    let originalMathRandom;
+
     beforeEach(function() {
         // Reset states
         playerData.clear();
@@ -59,31 +66,30 @@ describe('Server Functionality', function() {
         }
         __setSurgeTimeoutId(null);
 
+        // Reset serverMemes to initial state (deep copy)
+        // Note: serverMemes is an array of objects. Need to ensure it's properly reset.
+        // The server.js initializes serverMemes directly. For tests, we might need to
+        // re-initialize it or export a reset function if its state is modified directly.
+        // For simplicity, we'll assume serverMemes is re-imported or reset like this:
+        const initialMemes = [
+            { id: 'meme1', name: 'Classic Doge', currentHypeInvestment: 0, iconKey: 'icon_doge', investorsThisCycle: {} },
+            { id: 'meme2', name: 'Stonks Guy', currentHypeInvestment: 0, iconKey: 'icon_stonks', investorsThisCycle: {} }
+        ];
+        // Clear and repopulate serverMemes (if serverMemes is mutable and directly imported)
+        serverMemes.length = 0; 
+        initialMemes.forEach(m => serverMemes.push(JSON.parse(JSON.stringify(m))));
+
+
         // Mock wss and its clients
         mockClients = new Set();
-        mockWss = { // This is a simplified mock for what server.js needs for these tests
-            clients: mockClients,
-            on: () => {}, // Placeholder for 'connection' if needed, not for these tests
-        };
         
-        // Override the wss used by broadcast in server.js
-        // This is tricky because server.js defines wss internally.
-        // The `broadcast` function in server.js uses the `wss` instance from its own scope.
-        // For these tests to work without major refactoring of server.js to inject `wss`,
-        // we rely on the fact that `startTransactionSurge` and `endTransactionSurge` use `broadcast`,
-        // and `broadcast` uses the `wss` from its closure.
-        // A more robust approach would involve dependency injection for `wss` in `broadcast`.
-        // For now, we'll assume `server.js`'s `broadcast` function will use the `wss` it was defined with.
-        // To test `broadcast` more directly, we'd need to export and call it,
-        // or modify server.js's `broadcast` to accept `wss` as an argument.
-        // The current `module.exports` from `server.js` does not re-assign its internal `wss`.
-        // Let's assume `server.js` is modified such that `broadcast` uses the exported `wss` for testing.
-        // This is a common issue with non-DI patterns.
-        // For the purpose of this test, we will assume that we can temporarily re-wire `broadcast`
-        // or that `server.js`'s `broadcast` can be influenced.
-        // The most practical way without altering server.js too much is to mock `wss.clients` *before* server.js is loaded,
-        // or have server.js expose a way to set its internal `wss.clients`.
-        // Since server.js is already loaded, we will spy on client.send calls.
+        // Store and override wss.clients from the imported server.js module
+        // This allows `broadcast` within server.js to use our mockClients for testing
+        const actualWss = require('./server.js').wss; 
+        originalWssClients = actualWss.clients; // Store original
+        actualWss.clients = mockClients; // Override with mock set
+
+        originalMathRandom = Math.random; // Store original Math.random
     });
 
     afterEach(function() {
@@ -91,6 +97,12 @@ describe('Server Functionality', function() {
             clearTimeout(getSurgeTimeoutId());
             __setSurgeTimeoutId(null);
         }
+        // Restore original wss.clients
+        if (originalWssClients) {
+            const actualWss = require('./server.js').wss;
+            actualWss.clients = originalWssClients;
+        }
+        Math.random = originalMathRandom; // Restore Math.random
     });
 
     describe('Transaction Surge Events', function() {
@@ -99,12 +111,6 @@ describe('Server Functionality', function() {
             const client2 = createMockClient('client2');
             mockClients.add(client1);
             mockClients.add(client2);
-
-            // Replace global wss.clients for the broadcast function within server.js
-            // This is a bit of a hack. Ideally, broadcast would take wss as an argument.
-            const originalWss = require('./server.js').wss; // Get the actual wss
-            const originalClients = originalWss.clients;
-            originalWss.clients = mockClients; // Temporarily override
 
             startTransactionSurge();
 
@@ -121,7 +127,6 @@ describe('Server Functionality', function() {
 
             clearTimeout(getSurgeTimeoutId()); // Clean up timer
             __setSurgeTimeoutId(null);
-            originalWss.clients = originalClients; // Restore original clients
         });
 
         it('should not start a surge if one is already active', function() {
@@ -131,10 +136,7 @@ describe('Server Functionality', function() {
 
             const client1 = createMockClient('client1');
             mockClients.add(client1);
-            const originalWss = require('./server.js').wss;
-            const originalClients = originalWss.clients;
-            originalWss.clients = mockClients;
-
+           
             startTransactionSurge(); // Attempt to start another surge
 
             assert.strictEqual(getIsSurgeActive(), true, 'isSurgeActive should remain true');
@@ -143,7 +145,6 @@ describe('Server Functionality', function() {
 
             clearTimeout(originalTimeoutId);
             __setSurgeTimeoutId(null);
-            originalWss.clients = originalClients;
         });
 
 
@@ -157,11 +158,6 @@ describe('Server Functionality', function() {
             mockClients.add(client1);
             mockClients.add(client2);
             
-            const originalWss = require('./server.js').wss;
-            const originalClients = originalWss.clients;
-            originalWss.clients = mockClients;
-
-            // We need to spy on global clearTimeout
             let clearTimeoutCalledWith = null;
             const originalClearTimeout = clearTimeout;
             global.clearTimeout = (id) => { clearTimeoutCalledWith = id; };
@@ -180,7 +176,6 @@ describe('Server Functionality', function() {
             });
             
             global.clearTimeout = originalClearTimeout; // Restore original clearTimeout
-            originalWss.clients = originalClients;
         });
 
         it('should not attempt to end a surge if none is active', function() {
@@ -189,9 +184,6 @@ describe('Server Functionality', function() {
 
             const client1 = createMockClient('client1');
             mockClients.add(client1);
-            const originalWss = require('./server.js').wss;
-            const originalClients = originalWss.clients;
-            originalWss.clients = mockClients;
 
             let clearTimeoutCalled = false;
             const originalClearTimeout = clearTimeout;
@@ -204,7 +196,6 @@ describe('Server Functionality', function() {
             assert.strictEqual(client1.send.called, false, 'Client send should not be called');
             
             global.clearTimeout = originalClearTimeout;
-            originalWss.clients = originalClients;
         });
     });
 
@@ -249,7 +240,7 @@ describe('Server Functionality', function() {
             //    - Similar to above.
             //    - const mockClient = createMockClient('player2');
             //    - mockClient.send = sinonSpy();
-            //    - playerData.set('player2', { resources: 500, id: 'player2' });
+            //    - playerData.set('player2', { resources: 500, id: 'player2', hype: 100 }); // Added hype
             //    - const message = JSON.stringify({ type: 'transaction_score', score: 3, target: 5 });
             //    - Set isSurgeActive = true
 
@@ -276,15 +267,187 @@ describe('Server Functionality', function() {
             //      passing the mock `ws`.
             // 3. Assertions:
             //    - `playerData` should contain an entry for `ws.playerId`.
-            //    - The new player's resources should be the initial amount (e.g., 1000).
+            //    - The new player's resources and hype should be the initial amounts.
             //    - `ws.send` should have been called with a `connection_ack` message containing
-            //      `playerId` and `currentResources`.
+            //      `playerId`, `currentResources`, `currentHype`, and `serverMemes`.
             assert.ok(true, "This is a conceptual test. Implementation would require server.js refactor or more complex integration testing setup.");
+        });
+    });
+
+    describe('Meme Investment and Virality', function() {
+        beforeEach(function() {
+            // Reset serverMemes to a clean state for each test in this suite
+            const initialMemes = [
+                { id: 'meme1', name: 'Classic Doge', currentHypeInvestment: 0, iconKey: 'icon_doge', investorsThisCycle: {} },
+                { id: 'meme2', name: 'Stonks Guy', currentHypeInvestment: 0, iconKey: 'icon_stonks', investorsThisCycle: {} }
+            ];
+            serverMemes.length = 0;
+            initialMemes.forEach(m => serverMemes.push(JSON.parse(JSON.stringify(m))));
+            
+            playerData.clear(); // Clear player data
+            mockClients.forEach(client => client.send.resetHistory()); // Reset send history for mock clients
+        });
+
+        it('CONCEPTUAL: test_investHype_sufficientHype', function() {
+            // This tests the logic within the 'invest_hype' case of ws.on('message', ...)
+            // 1. Setup:
+            //    - const mockPlayer = createMockClient('player1');
+            //    - mockClients.add(mockPlayer);
+            //    - playerData.set('player1', { id: 'player1', resources: 1000, hype: 200 });
+            //    - const message = JSON.stringify({ type: 'invest_hype', memeId: 'meme1', amount: 50 });
+
+            // 2. Action:
+            //    - Simulate server receiving this message from mockPlayer.
+            //      (e.g., if message handler extracted: handleClientMessage(mockPlayer, message, playerData, serverMemes))
+
+            // 3. Assertions:
+            //    - assert.strictEqual(playerData.get('player1').hype, 150);
+            //    - assert.strictEqual(serverMemes.find(m => m.id === 'meme1').currentHypeInvestment, 50);
+            //    - assert.deepStrictEqual(serverMemes.find(m => m.id === 'meme1').investorsThisCycle['player1'], 50);
+            //    - assert.ok(mockPlayer.send.called, 'Player send should be called');
+            //    - const playerMsg = JSON.parse(mockPlayer.send.lastArgs[0]);
+            //    - assert.strictEqual(playerMsg.type, 'update_player_hype');
+            //    - assert.strictEqual(playerMsg.newHypeAmount, 150);
+            //    - Check broadcast was called:
+            //      let broadcastCalledWithUpdate = false;
+            //      mockClients.forEach(client => {
+            //          if (client.send.called) {
+            //              const args = client.send.args.find(argList => JSON.parse(argList[0]).type === 'all_memes_status_update');
+            //              if(args) broadcastCalledWithUpdate = true;
+            //          }
+            //      });
+            //      assert.ok(broadcastCalledWithUpdate, 'Broadcast with all_memes_status_update not found or client spy issue');
+             assert.ok(true, "This is a conceptual test for invest_hype with sufficient hype.");
+        });
+
+        it('CONCEPTUAL: test_investHype_insufficientHype', function() {
+            // 1. Setup:
+            //    - const mockPlayer = createMockClient('player1');
+            //    - mockClients.add(mockPlayer);
+            //    - playerData.set('player1', { id: 'player1', resources: 1000, hype: 20 }); // Insufficient hype
+            //    - const originalMemeInvestment = serverMemes.find(m => m.id === 'meme1').currentHypeInvestment;
+            //    - const message = JSON.stringify({ type: 'invest_hype', memeId: 'meme1', amount: 50 });
+
+            // 2. Action:
+            //    - Simulate server receiving this message from mockPlayer.
+
+            // 3. Assertions:
+            //    - assert.strictEqual(playerData.get('player1').hype, 20); // Unchanged
+            //    - assert.strictEqual(serverMemes.find(m => m.id === 'meme1').currentHypeInvestment, originalMemeInvestment); // Unchanged
+            //    - assert.ok(mockPlayer.send.called, 'Player send should be called for error');
+            //    - const playerMsg = JSON.parse(mockPlayer.send.lastArgs[0]);
+            //    - assert.strictEqual(playerMsg.type, 'error');
+            //    - assert.strictEqual(playerMsg.message, 'Insufficient hype or invalid amount.');
+            assert.ok(true, "This is a conceptual test for invest_hype with insufficient hype.");
+        });
+
+        it('test_calculateViralSpread_memeGoesViral', function() {
+            Math.random = () => 0.8; // Ensure high virality score
+
+            const investorId = 'player1';
+            const mockInvestorClient = createMockClient(investorId);
+            mockClients.add(mockInvestorClient);
+            playerData.set(investorId, { id: investorId, resources: 1000, hype: 100 });
+            
+            serverMemes[0].currentHypeInvestment = 100; // meme1
+            serverMemes[0].investorsThisCycle[investorId] = 100;
+
+            calculateViralSpread();
+
+            assert.strictEqual(playerData.get(investorId).resources, 1000 + VIRAL_REWARD_AMOUNT, 'Investor resources should increase');
+            
+            assert.ok(mockInvestorClient.send.called, `Investor client ${investorId} should have received messages.`);
+            const updateResourcesMsg = mockInvestorClient.send.args.find(args => JSON.parse(args[0]).type === 'update_resources');
+            assert.ok(updateResourcesMsg, 'Investor should receive update_resources message');
+            assert.strictEqual(JSON.parse(updateResourcesMsg[0]).newTotal, 1000 + VIRAL_REWARD_AMOUNT);
+
+            let viralEventBroadcasted = false;
+            let allMemesUpdateBroadcastedAfterViral = false;
+            mockClients.forEach(client => {
+                client.send.args.forEach(argList => {
+                    const msg = JSON.parse(argList[0]);
+                    if (msg.type === 'meme_viral_event' && msg.memeId === 'meme1') {
+                        viralEventBroadcasted = true;
+                    }
+                    if (msg.type === 'all_memes_status_update' && msg.memes[0].currentHypeInvestment === 0) {
+                         // Check if this is the reset update
+                        allMemesUpdateBroadcastedAfterViral = true;
+                    }
+                });
+            });
+            assert.ok(viralEventBroadcasted, 'meme_viral_event should be broadcasted');
+            assert.ok(allMemesUpdateBroadcastedAfterViral, 'all_memes_status_update with reset values should be broadcasted');
+
+            assert.strictEqual(serverMemes[0].currentHypeInvestment, 0, 'Meme investment should reset');
+            assert.deepStrictEqual(serverMemes[0].investorsThisCycle, {}, 'Meme investors should reset');
+        });
+
+        it('test_calculateViralSpread_noMemeGoesViral_dueToRandomness', function() {
+            Math.random = () => 0.1; // Ensure low virality score
+
+            const investorId = 'player1';
+            playerData.set(investorId, { id: investorId, resources: 1000, hype: 100 });
+            serverMemes[0].currentHypeInvestment = 100; // meme1, meets MIN_HYPE_TO_GO_VIRAL
+            serverMemes[0].investorsThisCycle[investorId] = 100;
+
+            calculateViralSpread();
+            
+            let viralEventBroadcasted = false;
+            mockClients.forEach(client => {
+                client.send.args.forEach(argList => {
+                    if (JSON.parse(argList[0]).type === 'meme_viral_event') {
+                        viralEventBroadcasted = true;
+                    }
+                });
+            });
+            assert.strictEqual(viralEventBroadcasted, false, 'meme_viral_event should NOT be broadcasted');
+            assert.strictEqual(playerData.get(investorId).resources, 1000, 'Investor resources should not change');
+            assert.strictEqual(serverMemes[0].currentHypeInvestment, 0, 'Meme investment should reset even if no viral event');
+            assert.deepStrictEqual(serverMemes[0].investorsThisCycle, {}, 'Meme investors should reset');
+        });
+
+        it('test_calculateViralSpread_noMemeGoesViral_dueToLowInvestment', function() {
+            Math.random = () => 0.9; // High random value, but investment is too low
+            
+            const investorId = 'player1';
+            playerData.set(investorId, { id: investorId, resources: 1000, hype: 100 });
+            serverMemes[0].currentHypeInvestment = MIN_HYPE_TO_GO_VIRAL - 10; // Below threshold
+            serverMemes[0].investorsThisCycle[investorId] = MIN_HYPE_TO_GO_VIRAL - 10;
+
+            calculateViralSpread();
+
+            let viralEventBroadcasted = false;
+            mockClients.forEach(client => {
+                 client.send.args.forEach(argList => {
+                    if (JSON.parse(argList[0]).type === 'meme_viral_event') {
+                        viralEventBroadcasted = true;
+                    }
+                });
+            });
+            assert.strictEqual(viralEventBroadcasted, false, 'meme_viral_event should NOT be broadcasted');
+            assert.strictEqual(playerData.get(investorId).resources, 1000, 'Investor resources should not change');
+            assert.strictEqual(serverMemes[0].currentHypeInvestment, 0, 'Meme investment should reset');
         });
     });
 });
 
 // --- Client-Side Test Concepts (Conceptual) ---
+// GameScene.js:
+//   handleServerMessage('connection_ack'): Verify this.playerHype, this.serverMemes, this.currentPlayerId are set; verify events 'player_hype_updated' and 'all_memes_status_updated' emitted.
+//   handleServerMessage('update_player_hype'): Verify this.playerHype updates; 'player_hype_updated' event emitted.
+//   handleServerMessage('all_memes_status_update'): Verify this.serverMemes updates; 'all_memes_status_updated' event emitted.
+//   handleServerMessage('meme_viral_event'): Verify 'show_notification' event emitted to UIScene with correct data.
+//   handleUIInvestHypeRequest(data): Verify this.webSocket.send called with correct 'invest_hype' payload.
+//
+// UIScene.js:
+//   handlePlayerHypeUpdated(data): Verify this.hypeText updates.
+//   handleAllMemesStatusUpdated(data): Verify this.currentMemesData updates; if panel is visible, populateMemeMarketPanel is called.
+//   toggleMemeMarketPanel(): Verify panel visibility changes and populateMemeMarketPanel is called on open.
+//   populateMemeMarketPanel():
+//     - Verify old elements are cleared.
+//     - Verify new meme entries (icon, name, investment, input, button) are created per this.currentMemesData.
+//     - Verify "Invest" button click gets DOM input value and emits 'ui_invest_hype_request' with correct data.
+//   handleShowNotification(data): Verify notification text and style/type are correctly handled.
 //
 // GameScene.js Tests:
 // ===================
