@@ -2,6 +2,7 @@
 import BootScene from './scenes/BootScene.js';
 import GameScene from './scenes/GameScene.js';
 import UIScene from './scenes/UIScene.js';
+import TransactionRushScene from './scenes/TransactionRushScene.js';
 
 const config = {
     type: Phaser.AUTO, // Phaser will try to use WebGL, and fall back to Canvas if it's not available
@@ -19,7 +20,8 @@ const config = {
     scene: [
         BootScene, // First scene to load assets
         GameScene, // Main gameplay scene
-        UIScene    // UI overlay scene (dashboard, etc.)
+        UIScene,   // UI overlay scene (dashboard, etc.)
+        TransactionRushScene // Transaction Rush mini-game scene
     ],
     scale: {
         mode: Phaser.Scale.FIT, // Scale the game to fit the parent container
