@@ -46,12 +46,20 @@ export default class UIScene extends Phaser.Scene {
         this.nodeDetailPanel.setVisible(false);
 
         // Listen for events from GameScene (e.g., WebSocket status)
-        this.scene.get('GameScene').events.on('websocket_status', this.updateConnectionStatus, this);
+        const gameScene = this.scene.get('GameScene');
+        if (gameScene) {
+            gameScene.events.on('websocket_status', this.updateConnectionStatus, this);
+            gameScene.events.on('chat_message_received', this.addChatMessage, this);
+            gameScene.events.on('player_resources_updated', this.handlePlayerResourcesUpdated, this);
+            gameScene.events.on('surge_started', this.handleSurgeStarted, this);
+            gameScene.events.on('surge_ended_by_player', this.handleSurgeEndedByPlayer, this);
+            gameScene.events.on('surge_ended_by_server', this.handleSurgeEndedByServer, this);
+        }
 
         // --- Chat Interface ---
         this.createChatInterface();
-        // Listen for chat messages from GameScene (which gets them from WebSocket)
-        this.scene.get('GameScene').events.on('chat_message_received', this.addChatMessage, this);
+        // Listen for chat messages from GameScene (which gets them from WebSocket) - Moved above for clarity
+        // this.scene.get('GameScene').events.on('chat_message_received', this.addChatMessage, this);
     }
 
     updateConnectionStatus(status) {
@@ -218,11 +226,64 @@ export default class UIScene extends Phaser.Scene {
 
     // Clean up listeners when scene is shut down
     shutdown() {
-        this.scene.get('GameScene').events.off('websocket_status', this.updateConnectionStatus, this);
-        this.scene.get('GameScene').events.off('chat_message_received', this.addChatMessage, this);
+        const gameScene = this.scene.get('GameScene'); // Check if GameScene still exists
+        if (gameScene && gameScene.events) {
+            gameScene.events.off('websocket_status', this.updateConnectionStatus, this);
+            gameScene.events.off('chat_message_received', this.addChatMessage, this);
+            gameScene.events.off('player_resources_updated', this.handlePlayerResourcesUpdated, this);
+            gameScene.events.off('surge_started', this.handleSurgeStarted, this);
+            gameScene.events.off('surge_ended_by_player', this.handleSurgeEndedByPlayer, this);
+            gameScene.events.off('surge_ended_by_server', this.handleSurgeEndedByServer, this);
+        }
+
         if (this.input.keyboard) {
             this.input.keyboard.off('keydown-ENTER');
         }
         console.log('UIScene: Shutdown.');
     }
+
+    // --- Event Handlers for GameScene Events ---
+
+    handlePlayerResourcesUpdated(data) {
+        if (this.resourceText && data) {
+            this.resourceText.setText(`Resources: ${data.newTotal}`);
+            this.showNotification(`Resources ${data.changeAmount > 0 ? '+' : ''}${data.changeAmount} (${data.reason})`, 3000);
+        } else {
+            console.warn('UIScene: resourceText or data not available for handlePlayerResourcesUpdated.', data);
+        }
+    }
+
+    handleSurgeStarted(data) {
+        if (data) {
+            this.showNotification(`TRANSACTION RUSH! Verify ${data.targetVerifications} in ${data.duration / 1000}s!`, 5000);
+            // Optional: Display a persistent indicator
+            if (!this.surgeIndicator) {
+                this.surgeIndicator = this.add.text(this.cameras.main.width / 2, 70, 'SURGE ACTIVE!', {
+                    font: '16px Orbitron', fill: '#ffab00', backgroundColor: 'rgba(50,0,0,0.7)', padding: {x:5, y:2}
+                }).setOrigin(0.5);
+            }
+            this.surgeIndicator.setVisible(true);
+        } else {
+            console.warn('UIScene: data not available for handleSurgeStarted.');
+        }
+    }
+
+    handleSurgeEndedByPlayer(data) {
+        if (data) {
+            this.showNotification(`Rush Complete! You verified ${data.score} / ${data.target} transactions.`, 4000);
+        } else {
+            console.warn('UIScene: data not available for handleSurgeEndedByPlayer.');
+        }
+        if (this.surgeIndicator) {
+            this.surgeIndicator.setVisible(false);
+        }
+    }
+
+    handleSurgeEndedByServer() {
+        this.showNotification('Transaction Rush has ended by server.', 3000);
+        if (this.surgeIndicator) {
+            this.surgeIndicator.setVisible(false);
+        }
+    }
+
 }

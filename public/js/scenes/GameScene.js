@@ -105,7 +105,51 @@ export default class GameScene extends Phaser.Scene {
                 // Remove representation for player who left
                 break;
             case 'network_event': // e.g., transaction surge, attack
-                this.scene.get('UIScene').showNotification(`Network Event: ${message.details}`);
+                this.scene.get('UIScene').showNotification(`Network Event: ${message.details || message.type}`);
+                break;
+            case 'transaction_surge_start':
+                console.log('GameScene: Transaction Surge Started!', message);
+                if (!this.scene.isActive('TransactionRushScene')) {
+                    // Pass the network manager instance (this.webSocket) or relevant parts to TransactionRushScene
+                    // For now, TransactionRushScene uses its own network reference passed via init.
+                    // We need to ensure GameScene's network (this.webSocket) is what TransactionRushScene uses.
+                    // A better approach would be a dedicated NetworkManager class passed around.
+                    // For now, we'll assume TransactionRushScene can use a passed network object.
+                    this.scene.launch('TransactionRushScene', {
+                        duration: message.duration,
+                        targetVerifications: message.target,
+                        network: this // Pass GameScene as a crude way to allow TransactionRushScene to send messages
+                                     // This is NOT ideal. A proper NetworkManager service/class is better.
+                                     // Or, TransactionRushScene should emit events that GameScene listens to for sending network messages.
+                                     // For this task, let's assume TransactionRushScene has a method like `setNetworkManager` or accepts it in init.
+                                     // The current TransactionRushScene takes a 'network' object in init.
+                                     // We need to ensure it has a `sendVerificationAttempt` method.
+                                     // Let's add a temporary method to GameScene for this.
+                    });
+                    this.scene.pause('GameScene');
+                    this.scene.bringToTop('UIScene'); // Ensures UI is responsive for notifications, etc.
+                    this.scene.get('TransactionRushScene').events.once('transaction_rush_complete', this.handleRushComplete, this);
+                    // Emit event for UIScene
+                    this.events.emit('surge_started', { duration: message.duration, targetVerifications: message.target });
+                }
+                break;
+            case 'transaction_surge_end':
+                console.log('GameScene: Transaction Surge Ended by Server!');
+                if (this.scene.isActive('TransactionRushScene')) {
+                    this.scene.stop('TransactionRushScene');
+                }
+                if (this.scene.isPaused('GameScene')) {
+                    this.scene.resume('GameScene');
+                }
+                this.scene.get('UIScene').events.emit('surge_ended_by_server'); // Notify UI
+                break;
+            case 'update_resources':
+                console.log('GameScene: Received resource update from server:', message);
+                this.scene.get('UIScene').events.emit('player_resources_updated', { 
+                    newTotal: message.newTotal, 
+                    changeAmount: message.changeAmount, 
+                    reason: message.reason 
+                });
                 break;
             case 'chat_message': // Handle incoming chat messages from server
                 console.log('GameScene: Received chat message:', message);
@@ -163,6 +207,42 @@ export default class GameScene extends Phaser.Scene {
         }
         this.events.off('ui_event', this.handleUIEvent, this);
         this.events.off('send_chat_message', this.sendChatMessageToServer, this);
+        
+        // Clean up listener for TransactionRushScene if GameScene is shut down while rush is active
+        // .once() handles self-removal, but if GameScene itself is destroyed, direct cleanup is good.
+        if (this.scene.manager.keys['TransactionRushScene'] && this.scene.isActive('TransactionRushScene')) {
+             const rushScene = this.scene.get('TransactionRushScene');
+             if(rushScene && rushScene.events) { // Check if rushScene and its events emitter exist
+                rushScene.events.off('transaction_rush_complete', this.handleRushComplete, this);
+             }
+        }
         console.log('GameScene: Shutdown, WebSocket closed.');
+    }
+
+    // Method for TransactionRushScene to send verifications
+    // This is a workaround. Ideally, TransactionRushScene emits an event, and GameScene handles sending.
+    sendVerificationAttempt(verificationsCount) {
+        if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
+            this.webSocket.send(JSON.stringify({ type: 'rush_verification_attempt', count: verificationsCount }));
+        }
+    }
+
+    handleRushComplete(data) {
+        console.log('GameScene: Transaction Rush completed by player. Score:', data.score, 'Target:', data.target);
+        
+        // Emit event for UIScene before resuming GameScene or sending to server
+        this.events.emit('surge_ended_by_player', { score: data.score, target: data.target });
+
+        if (this.scene.isPaused('GameScene')) {
+            this.scene.resume('GameScene');
+        }
+        // TransactionRushScene stops itself, so no need to stop it here.
+
+        if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
+            this.webSocket.send(JSON.stringify({ type: 'transaction_score', score: data.score, target: data.target }));
+        }
+        // UIScene might need to be explicitly brought to top again if TransactionRushScene was over it.
+        // Or if UIScene was paused, resume it.
+        this.scene.bringToTop('UIScene');
     }
 }
