@@ -1,20 +1,40 @@
+const LOCAL_STORAGE_KEY = 'layerDefenderPlayerData';
+
 export default class GameScene extends Phaser.Scene {
     constructor() {
         super('GameScene');
         this.nodes = [];
-        this.webSocket = null;
+        // this.webSocket = null; // WebSocket removed
+        this.playerResources = 0; 
         this.playerHype = 0;
-        this.serverMemes = []; 
+        this.clientMemes = []; 
         this.currentPlayerId = null;
+
+        // Surge timing parameters
+        this.timeToNextSurge = 0; 
+        this.surgeIntervalMin = 60000; // 1 minute
+        this.surgeIntervalMax = 180000; // 3 minutes
+
+        // Viral Spread constants
+        this.MIN_HYPE_TO_GO_VIRAL = 50;
+        this.MIN_VIRALITY_SCORE_THRESHOLD = 30;
+        this.VIRAL_REWARD_AMOUNT = 500;
+        this.VIRAL_CHECK_INTERVAL = 120000; // 2 minutes
+        this.viralSpreadTimer = null;
     }
 
     init(data) {
         // Data passed from other scenes, if any
         console.log('GameScene: Initializing with data:', data);
-        // Reset properties if scene is re-initialized
-        this.playerHype = 0;
-        this.serverMemes = [];
-        this.currentPlayerId = null;
+        
+        this.loadPlayerData(); // Load data first
+
+        // Other initializations not covered by localStorage (or to be set if no saved data)
+        this.clientMemes = []; 
+        this.currentPlayerId = null; 
+
+        // Initialize remaining data and emit events (including initial surge timer)
+        this.simulateInitialClientData(); 
     }
 
     preload() {
@@ -27,13 +47,13 @@ export default class GameScene extends Phaser.Scene {
         this.cameras.main.setBackgroundColor('#0a0a23'); // Dark blue space-like background
 
         // Example: Add a title or placeholder text
-        this.add.text(this.cameras.main.width / 2, 50, 'LayerEdge Network Defender - Game Area', {
+        this.add.text(this.cameras.main.width / 2, 50, 'LayerEdge Network Defender - Game Area (Offline)', {
             font: '28px Orbitron, sans-serif', // Using a futuristic font
             fill: '#00ff00'
         }).setOrigin(0.5);
 
-        // Initialize WebSocket connection
-        this.connectWebSocket();
+        // Initialize WebSocket connection - REMOVED
+        // this.connectWebSocket(); 
 
         // Example: Create a player node (this would be more dynamic)
         this.createPlayerNode(this.cameras.main.width / 2, this.cameras.main.height / 2, 'node_default', 'MyNode');
@@ -43,10 +63,10 @@ export default class GameScene extends Phaser.Scene {
             // Example: interact with nodes or place new ones
             console.log(`Pointer down at x: ${pointer.x}, y: ${pointer.y}`);
             // this.createPlayerNode(pointer.x, pointer.y, 'node_default', `Node-${this.nodes.length + 1}`);
-            // Send action to server via WebSocket
-            if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
-                this.webSocket.send(JSON.stringify({ type: 'player_action', action: 'click', x: pointer.x, y: pointer.y }));
-            }
+            // Send action to server via WebSocket - REMOVED
+            // if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
+            //     this.webSocket.send(JSON.stringify({ type: 'player_action', action: 'click', x: pointer.x, y: pointer.y }));
+            // }
         });
 
         // Listen for events from UIScene (e.g., button clicks)
@@ -69,163 +89,119 @@ export default class GameScene extends Phaser.Scene {
                 }
             });
         }
+
+        // Schedule periodic viral spread calculation
+        if (this.viralSpreadTimer) { // Clear existing timer if scene re-initializes
+            this.viralSpreadTimer.remove(false);
+        }
+        this.viralSpreadTimer = this.time.addEvent({
+            delay: this.VIRAL_CHECK_INTERVAL || 120000, 
+            callback: this.calculateViralSpreadClientSide,
+            callbackScope: this,
+            loop: true
+        });
+        console.log(`Client-side viral spread calculation scheduled every ${(this.VIRAL_CHECK_INTERVAL || 120000) / 1000} seconds.`);
+    }
+
+    setNextSurgeTimer() {
+        this.timeToNextSurge = Phaser.Math.Between(this.surgeIntervalMin, this.surgeIntervalMax);
+        console.log(`Next transaction surge in: ${this.timeToNextSurge / 1000}s`);
     }
 
     update(time, delta) {
         // Game loop logic
         // Example: move nodes, check for collisions, update game state
-    }
 
-    connectWebSocket() {
-        // Determine WebSocket protocol based on window.location.protocol
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${wsProtocol}//${window.location.hostname}:${window.location.port || (wsProtocol === 'wss:' ? 443 : 80)}`;
-        
-        this.webSocket = new WebSocket(wsUrl);
-
-        this.webSocket.onopen = () => {
-            console.log('GameScene: Connected to WebSocket server.');
-            this.webSocket.send(JSON.stringify({ type: 'join_game', playerId: `player_${Date.now()}` }));
-            // Notify UI scene about connection status
-            this.scene.get('UIScene').events.emit('websocket_status', { connected: true });
-        };
-
-        this.webSocket.onmessage = (event) => {
-            try {
-                const message = JSON.parse(event.data);
-                console.log('GameScene: Message from server:', message);
-                this.handleServerMessage(message);
-            } catch (error) {
-                console.error('GameScene: Error parsing message from server:', error);
+        // Client-side surge trigger logic
+        if (this.timeToNextSurge > 0) {
+            this.timeToNextSurge -= delta;
+            if (this.timeToNextSurge <= 0) {
+                this.triggerTransactionSurge();
+                this.setNextSurgeTimer(); // Set timer for the next one
             }
-        };
-
-        this.webSocket.onerror = (error) => {
-            console.error('GameScene: WebSocket error:', error);
-            this.scene.get('UIScene').events.emit('websocket_status', { connected: false, error: 'Connection error' });
-        };
-
-        this.webSocket.onclose = () => {
-            console.log('GameScene: Disconnected from WebSocket server.');
-            this.scene.get('UIScene').events.emit('websocket_status', { connected: false, error: 'Disconnected' });
-        };
-    }
-
-    handleServerMessage(message) {
-        // Process messages from the server (e.g., game state updates, new players, attacks)
-        switch (message.type) {
-            case 'connection_ack':
-                console.log('Server Acknowledged Connection:', message.message);
-                this.currentPlayerId = message.playerId;
-                this.playerHype = message.currentHype || 0; // Default to 0 if not provided
-                this.serverMemes = message.serverMemes || []; // Default to empty array
-                
-                console.log(`GameScene: Player ID ${this.currentPlayerId} initialized with ${this.playerHype} Hype.`);
-                console.log('GameScene: Initial server memes:', this.serverMemes);
-
-                this.events.emit('player_hype_updated', { newHypeAmount: this.playerHype });
-                this.events.emit('all_memes_status_updated', { memes: this.serverMemes });
-                break;
-            case 'update_player_hype':
-                this.playerHype = message.newHypeAmount;
-                console.log('GameScene: Player hype updated to', this.playerHype);
-                this.events.emit('player_hype_updated', { newHypeAmount: this.playerHype });
-                break;
-            case 'all_memes_status_update':
-                this.serverMemes = message.memes;
-                console.log('GameScene: All memes status updated', this.serverMemes);
-                this.events.emit('all_memes_status_updated', { memes: this.serverMemes });
-                break;
-            case 'meme_viral_event':
-                console.log('GameScene: Meme Viral Event!', message);
-                const { /*memeId, memeName,*/ investorPlayerIds, /*rewardAmount,*/ message: eventMessage } = message;
-                const playerWon = investorPlayerIds.includes(this.currentPlayerId);
-                // UIScene will handle the general notification.
-                // If playerWon is true, server will send separate 'update_resources'
-                this.scene.get('UIScene').events.emit('show_notification', { text: eventMessage, duration: 7000 });
-                if(playerWon) {
-                    console.log("GameScene: Current player was an investor in the viral meme!");
-                    // Additional client-side effects for winning can go here if needed.
-                }
-                break;
-            case 'error': // General error message from server
-                if (message.context === 'invest_hype') {
-                    console.error('GameScene: Hype investment error:', message.message);
-                    this.scene.get('UIScene').events.emit('show_notification', { text: `Investment Error: ${message.message}`, duration: 4000, type: 'error' });
-                } else {
-                    console.error('GameScene: Received generic error from server:', message.message);
-                    this.scene.get('UIScene').events.emit('show_notification', { text: `Server Error: ${message.message}`, duration: 4000, type: 'error' });
-                }
-                break;
-            case 'game_state_update':
-                // Update local game state based on server data
-                // e.g., update node positions, resources, etc.
-                break;
-            case 'new_player_joined':
-                // Add representation for new player
-                break;
-            case 'player_left':
-                // Remove representation for player who left
-                break;
-            case 'network_event': // e.g., transaction surge, attack
-                this.scene.get('UIScene').showNotification(`Network Event: ${message.details || message.type}`);
-                break;
-            case 'transaction_surge_start':
-                console.log('GameScene: Transaction Surge Started!', message);
-                if (!this.scene.isActive('TransactionRushScene')) {
-                    // Pass the network manager instance (this.webSocket) or relevant parts to TransactionRushScene
-                    // For now, TransactionRushScene uses its own network reference passed via init.
-                    // We need to ensure GameScene's network (this.webSocket) is what TransactionRushScene uses.
-                    // A better approach would be a dedicated NetworkManager class passed around.
-                    // For now, we'll assume TransactionRushScene can use a passed network object.
-                    this.scene.launch('TransactionRushScene', {
-                        duration: message.duration,
-                        targetVerifications: message.target,
-                        network: this // Pass GameScene as a crude way to allow TransactionRushScene to send messages
-                                     // This is NOT ideal. A proper NetworkManager service/class is better.
-                                     // Or, TransactionRushScene should emit events that GameScene listens to for sending network messages.
-                                     // For this task, let's assume TransactionRushScene has a method like `setNetworkManager` or accepts it in init.
-                                     // The current TransactionRushScene takes a 'network' object in init.
-                                     // We need to ensure it has a `sendVerificationAttempt` method.
-                                     // Let's add a temporary method to GameScene for this.
-                    });
-                    this.scene.pause('GameScene');
-                    this.scene.bringToTop('UIScene'); // Ensures UI is responsive for notifications, etc.
-                    this.scene.get('TransactionRushScene').events.once('transaction_rush_complete', this.handleRushComplete, this);
-                    // Emit event for UIScene
-                    this.events.emit('surge_started', { duration: message.duration, targetVerifications: message.target });
-                }
-                break;
-            case 'transaction_surge_end':
-                console.log('GameScene: Transaction Surge Ended by Server!');
-                if (this.scene.isActive('TransactionRushScene')) {
-                    this.scene.stop('TransactionRushScene');
-                }
-                if (this.scene.isPaused('GameScene')) {
-                    this.scene.resume('GameScene');
-                }
-                this.scene.get('UIScene').events.emit('surge_ended_by_server'); // Notify UI
-                break;
-            case 'update_resources':
-                console.log('GameScene: Received resource update from server:', message);
-                this.scene.get('UIScene').events.emit('player_resources_updated', { 
-                    newTotal: message.newTotal, 
-                    changeAmount: message.changeAmount, 
-                    reason: message.reason 
-                });
-                break;
-            case 'chat_message': // Handle incoming chat messages from server
-                console.log('GameScene: Received chat message:', message);
-                this.scene.get('UIScene').events.emit('chat_message_received', message);
-                break;
-            case 'broadcast':
-                console.log('Broadcast from another client:', message.data);
-                // Potentially show other player actions
-                break;
-            default:
-                console.log('GameScene: Received unhandled message type:', message.type);
         }
     }
+
+    // connectWebSocket() - REMOVED
+
+    // handleServerMessage(message) - Largely removed or simplified
+    // Kept for potential local client-side events if any, but server messages are gone.
+    handleLocalEvent(eventData) {
+        console.log('GameScene: handleLocalEvent called with:', eventData);
+        // Example: if (eventData.type === 'local_player_action') { ... }
+        // For now, this can be a placeholder or used for future client-only logic.
+    }
+
+    loadPlayerData() {
+        const savedDataJSON = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (savedDataJSON) {
+            try {
+                const savedData = JSON.parse(savedDataJSON);
+                this.playerResources = typeof savedData.playerResources === 'number' ? savedData.playerResources : 1000;
+                this.playerHype = typeof savedData.playerHype === 'number' ? savedData.playerHype : 100;
+                console.log('Player data loaded from localStorage:', this.playerResources, this.playerHype);
+            } catch (e) {
+                console.error('Error parsing player data from localStorage:', e);
+                this.playerResources = 1000; // Default value on error
+                this.playerHype = 100;    // Default value on error
+            }
+        } else {
+            this.playerResources = 1000; // Default value if no saved data
+            this.playerHype = 100;    // Default value if no saved data
+            console.log('No saved data found. Initializing with default values for resources and hype.');
+        }
+    }
+
+    savePlayerData() {
+        const dataToSave = {
+            playerResources: this.playerResources,
+            playerHype: this.playerHype
+        };
+        try {
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
+            console.log('Player data saved to localStorage.');
+        } catch (e) {
+            console.error('Error saving player data to localStorage:', e);
+        }
+    }
+
+    simulateInitialClientData() { 
+        // Player resources and hype are now loaded by loadPlayerData() before this is called.
+        // This method now focuses on other client-side initializations and emitting initial state.
+
+        // Initialize other data not stored in localStorage or use defaults if not set by loadPlayerData
+        this.currentPlayerId = this.currentPlayerId || 'local_player'; 
+        
+        // Initialize clientMemes only if it's empty (e.g., first time or not saved/loaded)
+        if (!this.clientMemes || this.clientMemes.length === 0) {
+            this.clientMemes = [ 
+                { id: 'meme1', name: 'Classic Doge', currentHypeInvestment: 0, iconKey: 'icon_doge', investorsThisCycle: {} },
+                { id: 'meme2', name: 'Stonks Guy', currentHypeInvestment: 0, iconKey: 'icon_stonks', investorsThisCycle: {} }
+            ];
+        }
+        
+        this.setNextSurgeTimer(); // Set initial timer for the first surge
+
+        console.log(`GameScene (Offline Mode): Player ID ${this.currentPlayerId} initialized/confirmed with ${this.playerHype} Hype and ${this.playerResources} resources.`);
+        console.log('GameScene (Offline Mode): Initial client memes:', this.clientMemes);
+
+        // Emit events to UIScene with current values (either loaded or default)
+        this.events.emit('player_resources_updated', { newTotal: this.playerResources, changeAmount: 0, reason: 'Initial' });
+        this.events.emit('player_hype_updated', { newHypeAmount: this.playerHype });
+        this.events.emit('all_memes_status_updated', { memes: this.clientMemes });
+        
+        // Simulate that the "server" (now client) has "acknowledged" the connection
+        if (this.scene.isActive('UIScene')) {
+             this.scene.get('UIScene').events.emit('websocket_status', { connected: false, error: 'Offline Mode' });
+        } else {
+            this.time.delayedCall(100, () => { // Wait for UIScene to potentially become active
+                if (this.scene.isActive('UIScene')) {
+                    this.scene.get('UIScene').events.emit('websocket_status', { connected: false, error: 'Offline Mode' });
+                }
+            });
+        }
+    }
+
 
     createPlayerNode(x, y, textureKey, name) {
         const nodeSprite = this.add.sprite(x, y, textureKey).setInteractive();
@@ -246,28 +222,50 @@ export default class GameScene extends Phaser.Scene {
 
     handleUIEvent(event) {
         console.log('GameScene: Received UI event:', event);
-        if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
-            this.webSocket.send(JSON.stringify({ type: 'ui_action', action: event.action, details: event.details }));
+        // if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) { // REMOVED
+        //     this.webSocket.send(JSON.stringify({ type: 'ui_action', action: event.action, details: event.details }));
+        // }
+        // Handle actions like 'upgrade_node', 'allocate_resource', etc. - Now client-side only
+        if (event.action === 'verify_transaction_action') {
+            // Simulate Transaction Rush start for offline play
+            if (!this.scene.isActive('TransactionRushScene')) {
+                console.log('GameScene (Offline): Simulating Transaction Rush start.');
+                this.scene.launch('TransactionRushScene', {
+                    duration: 30000, // 30 seconds
+                    targetVerifications: 50, // This could be randomized by triggerTransactionSurge if needed
+                    network: this // Still pass `this` for sendVerificationAttempt, which is now a stub
+                });
+                this.scene.pause('GameScene');
+                this.scene.bringToTop('UIScene');
+                // Ensure listener is set up correctly
+                const rushScene = this.scene.get('TransactionRushScene');
+                if (rushScene) {
+                    rushScene.events.once('transaction_rush_complete', this.handleRushComplete, this);
+                } else { // Fallback if scene isn't immediately available (less likely with launch)
+                     this.time.delayedCall(100, () => {
+                        const rushSceneRetry = this.scene.get('TransactionRushScene');
+                        if(rushSceneRetry) rushSceneRetry.events.once('transaction_rush_complete', this.handleRushComplete, this);
+                     });
+                }
+                this.events.emit('surge_started', { duration: 30000, targetVerifications: 50 });
+            }
         }
-        // Handle actions like 'upgrade_node', 'allocate_resource', etc.
     }
 
+    // sendChatMessageToServer(chatData) - REMOVED (or stubbed)
     sendChatMessageToServer(chatData) {
-        if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
-            this.webSocket.send(JSON.stringify({ type: 'chat_message', payload: chatData }));
-            console.log('GameScene: Sent chat message to server:', chatData);
-        } else {
-            console.warn('GameScene: WebSocket not open. Chat message not sent.');
-            // Optionally, notify UI that message failed to send
-            this.scene.get('UIScene').showNotification('Chat: Connection offline.', 2000);
+        console.warn('GameScene: sendChatMessageToServer called in offline mode. Chat is disabled.', chatData);
+        // Optionally, notify UI that chat is offline
+        if (this.scene.isActive('UIScene')) {
+            this.scene.get('UIScene').events.emit('show_notification', { text: 'Chat is offline.', duration: 2000, type: 'info' });
         }
     }
 
     // Make sure to clean up WebSocket connection when the scene is shut down
     shutdown() {
-        if (this.webSocket) {
-            this.webSocket.close();
-        }
+        // if (this.webSocket) { // REMOVED
+        //     this.webSocket.close();
+        // }
         this.events.off('ui_event', this.handleUIEvent, this);
         this.events.off('send_chat_message', this.sendChatMessageToServer, this);
         
@@ -285,39 +283,97 @@ export default class GameScene extends Phaser.Scene {
         if (uiScene && uiScene.events) { // Check if UIScene and its events emitter exist
             uiScene.events.off('ui_invest_hype_request', this.handleUIInvestHypeRequest, this);
         }
+        
+        // Cleanup Viral Spread Timer
+        if (this.viralSpreadTimer) {
+            this.viralSpreadTimer.remove(false);
+            this.viralSpreadTimer = null; 
+            console.log('GameScene: Viral spread timer removed.');
+        }
 
         console.log('GameScene: Shutdown, WebSocket closed.');
     }
 
     handleUIInvestHypeRequest(data) {
-        const { memeId, amount } = data;
-        console.log(`GameScene: UI request to invest ${amount} hype in ${memeId}`);
-        if (this.webSocket && this.webSocket.readyState === 1) { // WebSocket.OPEN is 1
-            this.webSocket.send(JSON.stringify({
-                type: 'invest_hype',
-                memeId: memeId,
-                amount: parseInt(amount, 10)
-            }));
-        } else {
-            console.warn('GameScene: WebSocket not open. Cannot send invest_hype.');
-            if (this.scene.get('UIScene')) {
-                this.scene.get('UIScene').events.emit('show_notification', { text: 'Error: Not connected to server.', duration: 3000, type: 'error' });
-            }
+        const { memeId, amount } = data; // Amount is expected to be a number from UIScene's parseInt
+        
+        console.log(`GameScene: Received UI request to invest ${amount} hype in ${memeId}`);
+
+        const currentHype = this.playerHype;
+        const memeIndex = this.clientMemes.findIndex(m => m.id === memeId);
+
+        if (memeIndex === -1) {
+            console.error(`GameScene: Meme ${memeId} not found for investment.`);
+            this.events.emit('show_notification', {
+                text: `Meme ${memeId} not found. Investment failed.`,
+                duration: 3000,
+                type: 'error'
+            });
+            return;
         }
+        const memeToUpdate = this.clientMemes[memeIndex];
+
+        if (isNaN(amount) || amount <= 0 || currentHype < amount) {
+            console.warn(`Invalid hype investment: amount ${amount}, current hype ${currentHype}`);
+            this.events.emit('show_notification', {
+                text: 'Investment failed: Insufficient hype or invalid amount.',
+                duration: 3000,
+                type: 'error'
+            });
+            return;
+        }
+
+        // Validation passed
+        this.playerHype -= amount;
+        memeToUpdate.currentHypeInvestment += amount;
+
+        if (!memeToUpdate.investorsThisCycle) {
+            memeToUpdate.investorsThisCycle = {};
+        }
+        memeToUpdate.investorsThisCycle[this.currentPlayerId] = (memeToUpdate.investorsThisCycle[this.currentPlayerId] || 0) + amount;
+
+        console.log(`Player ${this.currentPlayerId} invested ${amount} in ${memeToUpdate.name}. New Hype: ${this.playerHype}. Meme total: ${memeToUpdate.currentHypeInvestment}`);
+        
+        this.savePlayerData(); // Save playerHype (and resources)
+
+        this.events.emit('player_hype_updated', { newHypeAmount: this.playerHype });
+        this.events.emit('all_memes_status_updated', { memes: this.clientMemes });
     }
 
-    // Method for TransactionRushScene to send verifications
-    // This is a workaround. Ideally, TransactionRushScene emits an event, and GameScene handles sending.
+    // Method for TransactionRushScene to send verifications - STUBBED
     sendVerificationAttempt(verificationsCount) {
-        if (this.webSocket && this.webSocket.readyState === 1) { // WebSocket.OPEN
-            this.webSocket.send(JSON.stringify({ type: 'rush_verification_attempt', count: verificationsCount }));
-        }
+        // if (this.webSocket && this.webSocket.readyState === 1) { // REMOVED
+        //     this.webSocket.send(JSON.stringify({ type: 'rush_verification_attempt', count: verificationsCount }));
+        // }
+        console.log(`GameScene (Offline): Verification attempt count: ${verificationsCount}. (Not sent to server)`);
     }
 
     handleRushComplete(data) {
-        console.log('GameScene: Transaction Rush completed by player. Score:', data.score, 'Target:', data.target);
+        console.log('GameScene: handleRushComplete. Score:', data.score, 'Target:', data.target);
         
-        // Emit event for UIScene before resuming GameScene or sending to server
+        const rewardPerVerification = 10;
+        const bonusThreshold = data.target; // Or a slightly adjusted threshold if desired
+        let earnedResources = data.score * rewardPerVerification;
+        let bonusApplied = false;
+
+        if (data.score >= bonusThreshold && bonusThreshold > 0) { // Ensure target is meaningful
+            earnedResources *= 1.5; // 50% bonus
+            bonusApplied = true;
+            console.log('Bonus applied for meeting target!');
+        }
+        earnedResources = Math.floor(earnedResources);
+        
+        this.playerResources += earnedResources;
+        console.log(`Awarded ${earnedResources} resources. New total: ${this.playerResources}`);
+        this.savePlayerData(); // Call the existing localStorage save function
+
+        this.events.emit('player_resources_updated', {
+            newTotal: this.playerResources,
+            changeAmount: earnedResources,
+            reason: bonusApplied ? 'Transaction Rush +Bonus!' : 'Transaction Rush'
+        });
+
+        // This event is for UIScene to show a score summary or specific rush end notification
         this.events.emit('surge_ended_by_player', { score: data.score, target: data.target });
 
         if (this.scene.isPaused('GameScene')) {
@@ -325,11 +381,115 @@ export default class GameScene extends Phaser.Scene {
         }
         // TransactionRushScene stops itself, so no need to stop it here.
 
-        if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
-            this.webSocket.send(JSON.stringify({ type: 'transaction_score', score: data.score, target: data.target }));
-        }
+
         // UIScene might need to be explicitly brought to top again if TransactionRushScene was over it.
         // Or if UIScene was paused, resume it.
         this.scene.bringToTop('UIScene');
+    }
+
+    triggerTransactionSurge() {
+        console.log('GameScene: Triggering client-side Transaction Surge!');
+        
+        const surgeDuration = 30000; // 30 seconds
+        const targetVerifications = Phaser.Math.Between(30, 70); // Random target
+
+        if (this.scene.isActive('TransactionRushScene')) {
+            console.log('TransactionRushScene already active. Skipping new surge.');
+            return;
+        }
+
+        this.scene.launch('TransactionRushScene', {
+            duration: surgeDuration,
+            targetVerifications: targetVerifications,
+            network: this // Pass GameScene for sendVerificationAttempt (even if stubbed)
+        });
+        this.scene.pause('GameScene');
+        this.scene.bringToTop('UIScene'); 
+
+        this.events.emit('surge_started', { duration: surgeDuration, targetVerifications: targetVerifications });
+
+        const rushScene = this.scene.get('TransactionRushScene');
+        if (rushScene) {
+            rushScene.events.once('transaction_rush_complete', this.handleRushComplete, this);
+        } else {
+            // Fallback listener setup if scene launch is not immediate (less common for 'launch')
+            this.time.delayedCall(100, () => {
+                const rushSceneRetry = this.scene.get('TransactionRushScene');
+                if (rushSceneRetry) {
+                    rushSceneRetry.events.once('transaction_rush_complete', this.handleRushComplete, this);
+                } else {
+                    console.error("GameScene: Failed to get TransactionRushScene to attach complete listener even after delay.");
+                }
+            });
+        }
+    }
+
+    calculateViralSpreadClientSide() {
+        console.log('GameScene: Calculating viral spread (client-side)...');
+        let winningMeme = null;
+        let maxViralityScore = 0;
+
+        // Ensure constants are accessible, e.g. this.MIN_HYPE_TO_GO_VIRAL
+        const MIN_HYPE_TO_GO_VIRAL = this.MIN_HYPE_TO_GO_VIRAL; 
+        const MIN_VIRALITY_SCORE_THRESHOLD = this.MIN_VIRALITY_SCORE_THRESHOLD;
+        const VIRAL_REWARD_AMOUNT = this.VIRAL_REWARD_AMOUNT;
+
+        for (const meme of this.clientMemes) {
+            if (meme.currentHypeInvestment < MIN_HYPE_TO_GO_VIRAL) {
+                console.log(`Meme ${meme.name} has only ${meme.currentHypeInvestment} hype, needs ${MIN_HYPE_TO_GO_VIRAL} to be eligible for viral spread.`);
+                continue; 
+            }
+
+            let viralityScore = meme.currentHypeInvestment * Math.random();
+            console.log(`Meme ${meme.name} current investment: ${meme.currentHypeInvestment}, calculated virality score: ${viralityScore}`);
+
+            if (viralityScore > maxViralityScore) {
+                maxViralityScore = viralityScore;
+                winningMeme = meme;
+            }
+        }
+
+        if (winningMeme && maxViralityScore >= MIN_VIRALITY_SCORE_THRESHOLD) {
+            console.log(`Meme '${winningMeme.name}' went viral with score ${maxViralityScore}!`);
+            
+            const playerWasInvestor = winningMeme.investorsThisCycle && winningMeme.investorsThisCycle[this.currentPlayerId];
+            let playerReward = 0;
+
+            if (playerWasInvestor) {
+                this.playerResources += VIRAL_REWARD_AMOUNT;
+                playerReward = VIRAL_REWARD_AMOUNT;
+                this.savePlayerData(); // Save updated resources
+                console.log(`Player ${this.currentPlayerId} was an investor! Awarded ${VIRAL_REWARD_AMOUNT}. New total: ${this.playerResources}`);
+                // UIScene will get individual resource update via this event
+                this.events.emit('player_resources_updated', {
+                    newTotal: this.playerResources,
+                    changeAmount: VIRAL_REWARD_AMOUNT,
+                    reason: `Viral Meme '${winningMeme.name}' Payout`
+                });
+            }
+
+            // Notify UIScene about the viral event (even if player didn't win, so they see it happen)
+            this.events.emit('meme_viral_event', {
+                memeId: winningMeme.id,
+                memeName: winningMeme.name,
+                playerWon: !!playerWasInvestor, // Convert to boolean
+                rewardAmount: playerReward, // Will be 0 if player didn't invest
+                message: `${winningMeme.name} went VIRAL! ${playerWasInvestor ? 'You got ' + playerReward + ' resources!' : 'Investors shared the spoils!'}`
+            });
+
+        } else {
+            console.log('No meme reached viral status this cycle.');
+            this.events.emit('show_notification', { text: 'No meme went viral this cycle.', duration: 3000 });
+        }
+
+        // Reset for next cycle
+        this.clientMemes.forEach(meme => {
+            meme.currentHypeInvestment = 0;
+            meme.investorsThisCycle = {}; // Clear investors for this meme
+        });
+
+        // Update UIScene with reset meme statuses
+        this.events.emit('all_memes_status_updated', { memes: this.clientMemes });
+        console.log('Meme investments and investor lists reset for next cycle.');
     }
 }

@@ -70,9 +70,9 @@ class TransactionRushScene extends Phaser.Scene {
         // Audio Feedback (Placeholder)
         console.log('Verify click sound placeholder');
 
-        // Send verification to server (if network is available)
-        if (this.network && this.network.isSocketOpen()) {
-            this.network.sendVerificationAttempt(this.verifications); // Assuming this method exists in NetworkManager
+        // Send verification to server (if network is available) - Now a local call to GameScene's stubbed method
+        if (this.network && typeof this.network.sendVerificationAttempt === 'function') {
+            this.network.sendVerificationAttempt(this.verifications); 
         }
     }
 

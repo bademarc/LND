@@ -35,10 +35,10 @@ export default class UIScene extends Phaser.Scene {
         });
 
 
-        // --- Connection Status ---
-        this.connectionStatusText = this.add.text(this.cameras.main.width - 20, 20, 'Connecting...', {
+        // --- Connection Status --- (REMOVED, but text object kept for "Offline Mode" display)
+        this.connectionStatusText = this.add.text(this.cameras.main.width - 20, 20, 'Offline Mode', {
             font: '16px Orbitron, sans-serif',
-            fill: '#ffdd57', // Yellow for connecting
+            fill: '#aaaaaa', // Grey for offline
             align: 'right'
         }).setOrigin(1, 0);
 
@@ -69,8 +69,14 @@ export default class UIScene extends Phaser.Scene {
         // Listen for events from GameScene
         const gameScene = this.scene.get('GameScene');
         if (gameScene) {
-            gameScene.events.on('websocket_status', this.updateConnectionStatus, this);
-            gameScene.events.on('chat_message_received', this.addChatMessage, this);
+            // The 'websocket_status' event is still emitted by GameScene to set "Offline Mode" text,
+            // but UIScene no longer needs a dedicated handler for it as GameScene updates the text directly if needed,
+            // or UIScene's connectionStatusText is initialized to 'Offline Mode'.
+            // Let's ensure GameScene's simulateInitialClientData directly updates if UIScene is active, or UIScene initializes to 'Offline Mode'.
+            // The listener for 'websocket_status' in UIScene was for dynamic updates (Connected/Disconnected), which are no longer relevant.
+            // gameScene.events.on('websocket_status', this.updateConnectionStatus, this); // This line was already commented/removed.
+            
+            gameScene.events.on('chat_message_received', this.addChatMessage, this); // Kept for local display, though sending is disabled
             gameScene.events.on('player_resources_updated', this.handlePlayerResourcesUpdated, this);
             gameScene.events.on('surge_started', this.handleSurgeStarted, this);
             gameScene.events.on('surge_ended_by_player', this.handleSurgeEndedByPlayer, this);
@@ -84,15 +90,10 @@ export default class UIScene extends Phaser.Scene {
         this.createChatInterface();
     }
 
-    updateConnectionStatus(status) {
-        if (status.connected) {
-            this.connectionStatusText.setText('Connected');
-            this.connectionStatusText.setFill('#00ff00'); // Green for connected
-        } else {
-            this.connectionStatusText.setText(status.error || 'Disconnected');
-            this.connectionStatusText.setFill('#ff5555'); // Red for disconnected/error
-        }
-    }
+    // updateConnectionStatus(status) - REMOVED
+    // The GameScene now directly sets the text to "Offline Mode" in its simulateInitialServerData
+    // or can update it if there was a different local status to show.
+    // For now, GameScene's simulateInitialServerData sets it.
 
     createButton(text, x, y, eventAction) {
         const buttonBG = this.add.image(0, 0, 'button_bg').setScale(0.6, 0.4).setAlpha(0.8);
@@ -174,18 +175,6 @@ export default class UIScene extends Phaser.Scene {
     }
 
     createNodeDetailPanel() {
-        this.tweens.add({
-            targets: this.notificationText,
-            alpha: 0,
-            delay: duration - 500, // Start fading 500ms before duration ends
-            duration: 500,
-            onComplete: () => {
-                this.notificationText.setVisible(false);
-            }
-        });
-    }
-
-    createNodeDetailPanel() {
         const panelWidth = 300;
         const panelHeight = 200;
         const panelX = this.cameras.main.width / 2 - panelWidth / 2;
@@ -245,46 +234,49 @@ export default class UIScene extends Phaser.Scene {
 
         // Input field (using DOM element for better input handling)
         this.chatInput = this.add.dom(chatX + chatWidth / 2, chatY + chatHeight + 25).createFromHTML(`
-            <input type="text" id="chatInputField" placeholder="Type message..." style="width: ${chatWidth - 80}px; padding: 8px; border: 1px solid #3a3a7a; background-color: #1a1a2e; color: #e0e0e0; font-family: Arial;">
-        `);
+            <input type="text" id="chatInputField" placeholder="Chat (Offline)" style="width: ${chatWidth - 80}px; padding: 8px; border: 1px solid #3a3a7a; background-color: #1a1a2e; color: #e0e0e0; font-family: Arial;" disabled>
+        `); // Added 'disabled' attribute
         this.chatInput.setOrigin(0.5);
 
-        // Send button
-        const sendButtonBG = this.add.image(0, 0, 'button_bg').setScale(0.3, 0.3).setAlpha(0.8);
-        const sendButtonText = this.add.text(0, 0, 'Send', { font: '14px Orbitron, sans-serif', fill: '#ffffff' }).setOrigin(0.5);
+        // Send button - Disabled visually and functionally for chat
+        const sendButtonBG = this.add.image(0, 0, 'button_bg').setScale(0.3, 0.3).setAlpha(0.4); // Dimmed alpha
+        const sendButtonText = this.add.text(0, 0, 'Send', { font: '14px Orbitron', fill: '#aaaaaa' }).setOrigin(0.5); // Greyed text
         const sendButton = this.add.container(chatX + chatWidth - 35, chatY + chatHeight + 25, [sendButtonBG, sendButtonText]);
         sendButton.setSize(sendButtonBG.displayWidth, sendButtonBG.displayHeight);
-        sendButton.setInteractive({ useHandCursor: true });
+        // sendButton.setInteractive({ useHandCursor: true }); // Remove interactivity
 
-        sendButton.on('pointerover', () => sendButtonBG.setAlpha(1).setTint(0x00ff00));
-        sendButton.on('pointerout', () => sendButtonBG.setAlpha(0.8).clearTint());
-        sendButton.on('pointerdown', () => {
-            const inputElement = document.getElementById('chatInputField');
-            if (inputElement && inputElement.value.trim() !== '') {
-                this.sendChatMessage(inputElement.value.trim());
-                inputElement.value = ''; // Clear input field
-            }
+        // sendButton.on('pointerover', () => sendButtonBG.setAlpha(1).setTint(0x00ff00)); // Remove hover effects
+        // sendButton.on('pointerout', () => sendButtonBG.setAlpha(0.8).clearTint());
+        sendButton.on('pointerdown', () => { // Keep listener to provide feedback
+            // const inputElement = document.getElementById('chatInputField');
+            // if (inputElement && inputElement.value.trim() !== '') {
+            //     this.sendChatMessage(inputElement.value.trim());
+            //     inputElement.value = ''; // Clear input field
+            // }
+            this.showNotification({text: "Chat is disabled in offline mode.", duration: 2000, type: 'info'});
         });
 
-        // Allow sending with Enter key
+        // Allow sending with Enter key - Modified to show notification
         this.input.keyboard.on('keydown-ENTER', () => {
             const inputElement = document.getElementById('chatInputField');
-            if (inputElement && inputElement.value.trim() !== '' && document.activeElement === inputElement) {
-                this.sendChatMessage(inputElement.value.trim());
-                inputElement.value = '';
+            if (inputElement && document.activeElement === inputElement) { // Check if input field is focused
+                // if (inputElement.value.trim() !== '') {
+                //     this.sendChatMessage(inputElement.value.trim());
+                //     inputElement.value = '';
+                // }
+                 this.showNotification({text: "Chat is disabled in offline mode.", duration: 2000, type: 'info'});
             }
         });
     }
 
+    // sendChatMessage(messageText) - Kept for now, but GameScene's equivalent is stubbed
     sendChatMessage(messageText) {
-        console.log(`UIScene: Sending chat message: ${messageText}`);
+        console.log(`UIScene: Attempting to send chat message (offline): ${messageText}`);
         // Emit an event to GameScene to send via WebSocket
-        // Assuming a simple user name for now, could be dynamic later
         this.scene.get('GameScene').events.emit('send_chat_message', { user: 'Player', text: messageText });
-        // Optionally, add to local chat log immediately for responsiveness
-        // this.addChatMessage({ payload: { user: 'Me', text: messageText }, timestamp: new Date().toISOString() });
     }
 
+    // addChatMessage(messageData) - Kept as is, GameScene won't receive new server messages for this
     addChatMessage(messageData) {
         // messageData expected: { type: 'chat_message', payload: { user, text }, timestamp }
         const { user, text } = messageData.payload;
@@ -305,7 +297,7 @@ export default class UIScene extends Phaser.Scene {
     shutdown() {
         const gameScene = this.scene.get('GameScene'); // Check if GameScene still exists
         if (gameScene && gameScene.events) {
-            gameScene.events.off('websocket_status', this.updateConnectionStatus, this);
+            // gameScene.events.off('websocket_status', this.updateConnectionStatus, this); // Already removed
             gameScene.events.off('chat_message_received', this.addChatMessage, this);
             gameScene.events.off('player_resources_updated', this.handlePlayerResourcesUpdated, this);
             gameScene.events.off('surge_started', this.handleSurgeStarted, this);
